@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RTMP relay POC</title>
+
+  <link rel="stylesheet" href="app.css" />
+
+  <!-- OvenLiveKit -->
+  <script src="https://cdn.jsdelivr.net/npm/ovenlivekit@latest/dist/OvenLiveKit.min.js"></script>
+  <script type="module" src="app-main.js"></script>
+</head>
+<body>
+  <div class="wrap card">
+    <h1><span id="httpsWarn" class="pill" style="margin-left:8px; display:none">HTTPS required to access camera/mic</span></h1>
+    <div class="grid">
+      <div>
+        <video id="preview" playsinline autoplay muted></video>
+        <div class="status" id="status">Idle</div>
+      </div>
+      <div class="controls">
+        <div>
+          <label for="publishUrl">RTMP Broadcast URL</label>
+          <input id="publishUrl" type="text" placeholder="rtmp://example.com/live/streamKey" />
+        </div>
+        <div class="row">
+          <div>
+            <label for="cameraSelect">Camera</label>
+            <select id="cameraSelect"></select>
+          </div>
+          <div>
+            <label for="micSelect">Microphone</label>
+            <select id="micSelect"></select>
+          </div>
+        </div>
+        <div>
+          <label>Mic level</label>
+          <div class="meter" title="Live microphone level">
+            <div class="bar" id="micBar"></div>
+          </div>
+          <div class="meter-label"><span id="micDb">0%</span><span id="audioState" class="pill">audio ready</span></div>
+        </div>
+        <div class="btns">
+          <button id="enableBtn" class="muted" style="display:none">Enable camera & mic</button>
+          <button id="startBtn" class="primary">Start broadcast</button>
+          <button id="stopBtn" class="danger" disabled>Stop</button>
+        </div>
+      </div>
+    </div>
+    <div class="footer" id="connInfo">Not connected</div>
+  </div>
+</body>
+</html>
