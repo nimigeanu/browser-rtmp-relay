@@ -264,58 +264,38 @@ _setup()
 
 	copy_config_files()
 	{
-		local DO_COPY=false
+		# Ensure configuration directory exists
+		if [ ! -d "${CONF_PATH}" ]; then
+			logi "• Creating configuration directory ${PRESET_HIGHLIGHT}${CONF_PATH}"
+			run mkdir -p "${CONF_PATH}" || die "• ERROR: Could not create configuration directory"
+		fi
 
-		# Check if the configuration file exists
-		if check_already_setup
-		then
-			logw "• Configuration files already exist in ${PRESET_HIGHLIGHT}${CONF_PATH}"
-
-			while true
-			do
-				logw -n "• Do you want to overwrite them? (y/N) "
-				local ANSWER
-				read -r ANSWER
-
-				case "${ANSWER}" in
-					y|Y)
-						ANSWER="y"
-						break
-						;;
-					n|N)
-						ANSWER="n"
-						break
-						;;
-					*)
-				esac
-			done
-
-			if [ "${ANSWER}" == "y" ]
-			then
-				local BAK_CONF_PATH="${CONF_PATH}_$(date +%Y%m%d%H%M%S)"
-				DO_COPY=true
-				logi "• Backing up configuration files to ${PRESET_HIGHLIGHT}${BAK_CONF_PATH}"
-				{
-					run mkdir -p "${BAK_CONF_PATH}" &&
-					run mv "${CONF_PATH}"/* "${BAK_CONF_PATH}"
-				} || die "• ERROR: Could not create backup"
-			else
-				logi "• OvenMediaEngine will use the existing configuration files"
-			fi
+		# Message for clarity
+		if compgen -G "${CONF_PATH}/*" > /dev/null; then
+			logi "• Configuration exists; adding only missing defaults (no overwrites)"
 		else
-			DO_COPY=true
+			logi "• No configuration found; installing default configuration"
 		fi
 
-		if ${DO_COPY}
-		then
-			logi "• Copying configuration to ${PRESET_HIGHLIGHT}${CONF_PATH}" &&
-			run "${DOCKER}" run \
-				--rm \
-				--mount=type=bind,source="${CONF_PATH}",target=/tmp/conf \
-				"${IMAGE_NAME}" \
-				/bin/bash -c 'cp /opt/ovenmediaengine/bin/origin_conf/* /tmp/conf/'
-		fi
+		# Copy defaults for files that don't already exist (no overwrite)
+		run "${DOCKER}" run \
+			--rm \
+			--mount=type=bind,source="${CONF_PATH}",target=/tmp/conf \
+			"${IMAGE_NAME}" \
+			/bin/bash -c '
+				set -e
+				src="/opt/ovenmediaengine/bin/origin_conf"
+				for f in "$src"/*; do
+					base="$(basename "$f")"
+					# copy only if target does not exist
+					if [ ! -e "/tmp/conf/$base" ]; then
+						cp "$f" "/tmp/conf/$base"
+					fi
+				done
+			' \
+		|| die "• ERROR: Could not copy configuration file(s)"
 	}
+
 
 	{
 		prepare_dir_if_needed &&
