@@ -10,6 +10,19 @@ import { acquireStream } from './app-media.js';
 document.addEventListener('DOMContentLoaded', () => {
   initDomRefs();
 
+  // Initial state: do NOT access camera; show the access button and hide start/stop
+  if (store.els.enableBtn) store.els.enableBtn.style.display = 'inline-block';
+  if (store.els.enableBtn) store.els.enableBtn.textContent = 'Access Camera and Microphone';
+  if (store.els.startBtn) store.els.startBtn.style.display = 'none';
+  if (store.els.stopBtn) store.els.stopBtn.style.display = 'none';
+  setStatus('Idle — click “Access Camera and Microphone” to begin');
+  // Disable device selectors until access is granted
+  if (store.els.cameraSelect) store.els.cameraSelect.disabled = true;
+  if (store.els.micSelect) store.els.micSelect.disabled = true;
+  // Hide Stop/Disconnect when disabled
+  if (store.els.stopBtn) { store.els.stopBtn.disabled = true; store.els.stopBtn.style.display = 'none'; }
+
+
   if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
     store.els.httpsWarn.style.display = 'inline-block';
   }
@@ -22,27 +35,23 @@ document.addEventListener('DOMContentLoaded', () => {
   installGlobalTraps();
   attachNetwork401Sniffer();
 
-  (async function main() {
-    try {
-      await acquireStream();
-    } catch (e) {
-      store.els.enableBtn.style.display = 'inline-block';
-      setStatus('Click the button to enable camera and mic', 'warn');
-      updateUiForState('idle');
-    }
-  })();
+  // Startup camera access disabled by spec: wait for explicit user click.
 
-  store.els.cameraSelect.addEventListener('change', () =>
-    acquireStream({ video: store.els.cameraSelect.value, audio: store.els.micSelect.value })
-  );
-  store.els.micSelect.addEventListener('change', () =>
-    acquireStream({ video: store.els.cameraSelect.value, audio: store.els.micSelect.value })
-  );
+  store.els.cameraSelect.addEventListener('change', () => {
+    acquireStream({ video: store.els.cameraSelect.value, audio: store.els.micSelect.value });
+  });
+  store.els.micSelect.addEventListener('change', () => {
+    acquireStream({ video: store.els.cameraSelect.value, audio: store.els.micSelect.value });
+  });
 
   store.els.startBtn.addEventListener('click', async () => {
     if (!store.currentStream) {
-      try { await acquireStream({ video: store.els.cameraSelect.value, audio: store.els.micSelect.value }); }
-      catch (e) { setStatus('Access denied', 'err'); return; }
+      try {
+        await acquireStream({ video: store.els.cameraSelect.value, audio: store.els.micSelect.value });
+      } catch (e) {
+        setStatus('Access denied', 'err');
+        return;
+      }
     }
     startStreaming(whipUrlPrefix);
   });
@@ -50,11 +59,23 @@ document.addEventListener('DOMContentLoaded', () => {
   store.els.stopBtn.addEventListener('click', userStop);
 
   store.els.enableBtn.addEventListener('click', async () => {
-    try { await acquireStream(); store.els.enableBtn.style.display = 'none'; }
-    catch (e) { setStatus('Access denied', 'err'); }
+    // Hide the access button immediately per spec
+    store.els.enableBtn.style.display = 'none';
+    try {
+      await acquireStream();
+      // Success: show Start/Stop and proceed as normal
+      if (store.els.startBtn) store.els.startBtn.style.display = 'inline-block';
+      if (store.els.stopBtn) store.els.stopBtn.style.display = 'inline-block';
+      setStatus('Devices ready');
+    } catch (e) {
+      // Failure: show a clear message and keep Start/Stop hidden
+      setStatus('Camera/microphone access was denied or failed. Refresh the page to try again.', 'err');
+      if (store.els.startBtn) store.els.startBtn.style.display = 'none';
+      if (store.els.stopBtn) store.els.stopBtn.style.display = 'none';
+    }
   });
 
-  window.addEventListener('beforeunload', () => {
+window.addEventListener('beforeunload', () => {
     disarmWatchdog();
     try { cancelAnimationFrame(store.meterRAF); } catch (e) {}
     if (store.currentStream) store.currentStream.getTracks().forEach(t => t.stop());
