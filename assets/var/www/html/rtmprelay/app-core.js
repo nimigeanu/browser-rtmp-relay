@@ -2,6 +2,7 @@
 
 export const store = {
   olk: null,
+  devicesReady: false,
   currentStream: null,
   audioContext: null,
   analyser: null,

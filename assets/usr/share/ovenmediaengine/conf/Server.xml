@@ -50,7 +50,7 @@
 			<WebRTC>
 				<Signalling>
 					<Port>${env:OME_WEBRTC_SIGNALLING_PORT:3333}</Port>
-					<TLSPort>${env:OME_WEBRTC_SIGNALLING_TLS_PORT:443}</TLSPort>
+					<TLSPort>${env:OME_WEBRTC_SIGNALLING_TLS_PORT:8443}</TLSPort>
 					<WorkerCount>1</WorkerCount>
 				</Signalling>
 				<IceCandidates>

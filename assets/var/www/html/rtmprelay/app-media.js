@@ -41,8 +41,9 @@ export async function acquireStream(deviceIds) {
   await refreshDevices();
   syncSelectValueToCurrentTracks();
 
-  setStatus('Devices ready');
-  updateUiForState('idle');
+  store.devicesReady = true;
+setStatus('Devices ready');
+updateUiForState('idle');
 }
 
 function syncSelectValueToCurrentTracks() {

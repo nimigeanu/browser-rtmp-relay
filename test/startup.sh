@@ -9,6 +9,7 @@ certbot --nginx \
   -m admin@rtmprelay4.wpstream.live \
   --redirect
 
+git clone https://github.com/nimigeanu/browser-rtmp-relay.git /tmp/rtmprelay
 rsync -aHAX /tmp/rtmprelay/assets/ /
 rm -rf -- /tmp/rtmprelay
 
