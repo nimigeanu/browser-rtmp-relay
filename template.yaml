@@ -1,0 +1,466 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Browser RTMP relay: dedicated VPC (10.158.10.0/24), Ubuntu 24.04 AMI per-region,
+  IMDSv2 required, auto-Route53 record if hosted zone exists, progress page on :8087,
+  final HTTPS relay URL at https://<StackName>.<DomainName>/rtmprelay/?url=...
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.medium
+    AllowedValues: [t3.micro, t3.small, t3.medium, t3.large]
+    Description: EC2 instance size
+  DomainName:
+    Type: String
+    Description: A domain (e.g., example.com) that you have full DNS access to. A subdomain of it will be created/used.
+
+Mappings:
+  RegionMap:
+    mx-central-1:   { AMI: ami-0dbcc2c9bfe220e83 }
+    eu-south-1:     { AMI: ami-0bb1c333c72a7ebb4 }
+    ap-south-1:     { AMI: ami-02d26659fd82cf299 }
+    il-central-1:   { AMI: ami-04dbb447f35f57d09 }
+    me-central-1:   { AMI: ami-0fef9c511a52d9d03 }
+    af-south-1:     { AMI: ami-08ec24445ff6d6d96 }
+    eu-central-1:   { AMI: ami-0a116fa7c861dd5f9 }
+    us-west-1:      { AMI: ami-00271c85bf8a52b84 }
+    eu-north-1:     { AMI: ami-0a716d3f3b16d290c }
+    ca-central-1:   { AMI: ami-0dd67d541aa70c8b9 }
+    ca-west-1:      { AMI: ami-0ff8009351a679554 }
+    us-east-1:      { AMI: ami-0360c520857e3138f }
+    ap-east-1:      { AMI: ami-0b561d33293a76a1c }
+    ap-southeast-1: { AMI: ami-0933f1385008d33c4 }
+    ap-northeast-1: { AMI: ami-0a71a0b9c988d5e5e }
+    me-south-1:     { AMI: ami-082c5ebcf775970ae }
+    eu-west-1:      { AMI: ami-0bc691261a82b32bc }
+    sa-east-1:      { AMI: ami-035efd31ab8835d8a }
+    cn-northwest-1: { AMI: ami-0cd41ef4f1f20b06f }
+    cn-north-1:     { AMI: ami-09d6b91a011d263c2 }
+    us-gov-west-1:  { AMI: ami-0074525def93676f0 }
+    us-gov-east-1:  { AMI: ami-0271aa8a58acfdf20 }
+    us-east-2:      { AMI: ami-0cfde0ea8edd312d4 }
+    us-west-2:      { AMI: ami-03aa99ddf5498ceb9 }
+    ap-east-2:      { AMI: ami-022c39017a708b7f5 }
+    ap-south-2:     { AMI: ami-0bd4cda58efa33d23 }
+    eu-south-2:     { AMI: ami-0fd47a5cb59868dde }
+    eu-central-2:   { AMI: ami-0a5237fe4793e04b1 }
+    eu-west-2:      { AMI: ami-046c2381f11878233 }
+    ap-northeast-2: { AMI: ami-00e73adb2e2c80366 }
+    ap-southeast-2: { AMI: ami-0279a86684f669718 }
+    eu-west-3:      { AMI: ami-02d7ced41dff52ebc }
+    ap-northeast-3: { AMI: ami-0fe4e90accd5cc34a }
+    ap-southeast-3: { AMI: ami-0f60ebc551a693514 }
+    ap-southeast-4: { AMI: ami-0e656e7dd1da73855 }
+    ap-southeast-5: { AMI: ami-0442167bec1f7ab6d }
+    ap-southeast-6: { AMI: ami-0e0e9782bd252d892 }
+    ap-southeast-7: { AMI: ami-0aa9ab10add089314 }
+
+Resources:
+  # Networking
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.158.10.0/24
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: rtmprelay-vpc }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: rtmprelay-igw }]
+
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.158.10.0/24
+      MapPublicIpOnLaunch: true
+      Tags: [{ Key: Name, Value: rtmprelay-subnet }]
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags: [{ Key: Name, Value: rtmprelay-rt }]
+
+  RouteToIGW:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref RouteTable
+
+  # Security Group (SSH open to 0.0.0.0/0, but no key is attached)
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: RTMP Relay SG
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp # SSH
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp # HTTP
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp # HTTPS
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp # Progress page
+          FromPort: 8087
+          ToPort: 8087
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp # OME HTTPS/WHIP
+          FromPort: 8443
+          ToPort: 8443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp # TURN/STUN TCP + OME API TLS
+          FromPort: 3478
+          ToPort: 3478
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: udp # WebRTC UDP range (narrowed)
+          FromPort: 10000
+          ToPort: 10004
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags: [{ Key: Name, Value: rtmprelay-sg }]
+
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags: [{ Key: Name, Value: rtmprelay-eip }]
+
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !FindInMap [RegionMap, !Ref "AWS::Region", AMI]
+      InstanceType: !Ref InstanceType
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref PublicSubnet
+          GroupSet: [!Ref SecurityGroup]
+      MetadataOptions:
+        HttpTokens: required
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs:
+            VolumeSize: 50
+            VolumeType: gp3
+            Encrypted: true
+      Tags: [{ Key: Name, Value: rtmprelay-ec2 }]
+      UserData:
+        Fn::Base64:
+          Fn::Sub: |
+            #!/bin/bash
+            set -euxo pipefail
+
+            DOMAIN='${AWS::StackName}.${DomainName}'
+            EMAIL="admin@${DomainName}"
+            PROGRESS_DIR="/opt/setup-progress"
+            MANAGED='${DNSManager.Managed}'
+            TARGET_IP='${ElasticIP.PublicIp}'
+            mkdir -p "$PROGRESS_DIR"
+
+            cat > "$PROGRESS_DIR/index.html" <<'HTML'
+            <!doctype html><meta charset="utf-8">
+            <meta http-equiv="refresh" content="5">
+            <title>RTMP Relay Setup Progress</title>
+            <style>
+              body{font-family:system-ui,Arial,sans-serif;margin:32px;max-width:860px}
+              h1{margin:0 0 8px} .step{padding:8px 0;border-bottom:1px solid #ddd}
+              .ok{color:#156d1d} .warn{color:#925b00} .err{color:#a40000}
+              code{background:#f6f8fa;padding:2px 6px;border-radius:6px}
+            </style>
+            <h1>Setting up your RTMP Relay…</h1>
+            <div id="log">
+              <div class="step">Booting…</div>
+            </div>
+            HTML
+
+            progress() {
+              echo "<div class=\"step\">$(date -u '+%Y-%m-%d %H:%M:%SZ') — $*</div>" >> "$PROGRESS_DIR/index.html"
+            }
+
+            # Progress server on :8087
+            nohup python3 -m http.server 8087 --directory "$PROGRESS_DIR" >/var/log/progress-server.log 2>&1 &
+
+            progress "Updating packages…"
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get upgrade -y
+
+            progress "Installing dependencies…"
+            apt-get install -y git curl unzip cron docker.io nodejs npm nginx certbot python3-certbot-nginx rsync dnsutils
+            npm install -g pm2
+            systemctl enable --now docker
+            systemctl enable --now nginx
+
+            progress "Cloning browser-rtmp-relay assets…"
+            git clone https://github.com/nimigeanu/browser-rtmp-relay.git /tmp/rtmprelay
+            rsync -aHAX /tmp/rtmprelay/assets/ /
+            rm -rf -- /tmp/rtmprelay
+            nginx -t && systemctl reload nginx || true
+
+            # IMDSv2 public IP
+            progress "Fetching instance public IP via IMDSv2…"
+            TOKEN="$(curl -s -X PUT 'http://169.254.169.254/latest/api/token' -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600' || true)"
+            PUBIP="$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/public-ipv4 || true)"
+            progress "Public IP is $PUBIP"
+
+            # DNS guidance (two situations)
+            if [ "$MANAGED" = "true" ]; then
+              progress "Route 53 hosted zone detected. We created A record <code>$DOMAIN</code> → <code>$TARGET_IP</code>. Waiting for DNS to propagate…"
+            else
+              cat >> "$PROGRESS_DIR/index.html" <<HTML
+            <div class="step warn">
+              No Route 53 hosted zone detected for <code>${DomainName}</code>.<br/>
+              Please create an <strong>A</strong> record at your DNS provider:<br/>
+              <code>$DOMAIN</code> → <code>$TARGET_IP</code><br/>
+              This page will continue automatically once the record resolves correctly.
+            </div>
+            HTML
+            fi
+
+            # Wait for DNS to resolve to our public IP
+            for i in $(seq 1 180); do
+              A="$(dig +short "$DOMAIN" A @1.1.1.1 | tail -n1)"
+              [ "$A" = "$PUBIP" ] && break
+              AREC="$A"; if [ -z "$AREC" ]; then AREC="none"; fi
+              echo "<div class='step warn'>Current A record is <code>$AREC</code>; expecting <code>$PUBIP</code>…</div>" >> "$PROGRESS_DIR/index.html"
+              sleep 10
+            done
+
+            progress "Requesting Let's Encrypt certificate via nginx plugin…"
+            certbot --nginx \
+              -d "$DOMAIN" \
+              --non-interactive \
+              --agree-tos \
+              -m "$EMAIL" \
+              --redirect || {
+                echo "<div class='step err'>Certbot failed. Check DNS and try again.</div>" >> "$PROGRESS_DIR/index.html"
+              }
+
+            progress "Preparing OME docker launcher and TLS files…"
+            chmod +x /usr/share/ovenmediaengine/launcher/ome_docker_launcher.sh || true
+            /usr/share/ovenmediaengine/launcher/ome_docker_launcher.sh setup || true
+
+            SSL_DIR="/etc/letsencrypt/live/$DOMAIN"
+            OME_CONF_DIR="/usr/share/ovenmediaengine/conf"
+            if [ -d "$SSL_DIR" ]; then
+              cp "$SSL_DIR/cert.pem"      "$OME_CONF_DIR/cert.crt" || true
+              cp "$SSL_DIR/privkey.pem"   "$OME_CONF_DIR/cert.key" || true
+              cp "$SSL_DIR/fullchain.pem" "$OME_CONF_DIR/cert.ca-bundle" || true
+              chmod 600 "$OME_CONF_DIR/cert.crt" "$OME_CONF_DIR/cert.key" "$OME_CONF_DIR/cert.ca-bundle" || true
+            fi
+
+            progress "Configuring PM2 log rotation…"
+            export PM2_HOME=/root/.pm2
+            pm2 install pm2-logrotate || true
+            pm2 set pm2-logrotate:max_size 10M || true
+            pm2 set pm2-logrotate:retain 7 || true
+            pm2 set pm2-logrotate:compress true || true
+
+            progress "Installing admission service deps and starting with PM2 (if present)…"
+            if [ -d /usr/share/ovenmediaengine/admission ]; then
+              cd /usr/share/ovenmediaengine/admission/
+              npm install || true
+              pm2 start || true
+            fi
+
+            pm2 startup systemd -u root --hp /root || true
+            pm2 save || true
+
+            progress "Starting OvenMediaEngine docker stack…"
+            /usr/share/ovenmediaengine/launcher/ome_docker_launcher.sh start || true
+
+            FINAL_URL="https://$DOMAIN/rtmprelay/?url=https%3A%2F%2F$DOMAIN%3A8443%2Frtmprelay%2F"
+            cat > "$PROGRESS_DIR/index.html" <<HTML
+            <!doctype html><meta charset="utf-8">
+            <title>RTMP Relay Ready</title>
+            <style>
+              body{font-family:system-ui,Arial,sans-serif;margin:32px;max-width:860px}
+              a.button{display:inline-block;padding:12px 16px;border-radius:10px;border:1px solid #ccc;text-decoration:none}
+            </style>
+            <h1>✅ Your RTMP Relay is ready</h1>
+            <p>Open the relay UI over HTTPS:</p>
+            <p><a class="button" href="$FINAL_URL">$FINAL_URL</a></p>
+            HTML
+
+  # EIP Association
+  EIPAssoc:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIP.AllocationId
+      InstanceId: !Ref Instance
+
+  # DNS manager (auto-detect hosted zone, create/UPSERT A record if possible)
+  DNSManagerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: Route53ManageDNS
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - route53:ListHostedZones
+                  - route53:ListHostedZonesByName
+                  - route53:ChangeResourceRecordSets
+                  - route53:ListResourceRecordSets
+                Resource: '*'
+
+  DNSManagerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 120
+      Role: !GetAtt DNSManagerRole.Arn
+      Code:
+        ZipFile: |
+          import json, boto3, urllib.request, traceback
+          r53 = boto3.client('route53')
+          def send(event, context, status, data, physical_id=None, reason=None):
+              body = {
+                  'Status': status,
+                  'Reason': reason or ('See CloudWatch Logs for details'),
+                  'PhysicalResourceId': physical_id or event.get('PhysicalResourceId') or 'dns-manager',
+                  'StackId': event['StackId'],
+                  'RequestId': event['RequestId'],
+                  'LogicalResourceId': event['LogicalResourceId'],
+                  'NoEcho': False,
+                  'Data': data or {}
+              }
+              req = urllib.request.Request(event['ResponseURL'], data=json.dumps(body).encode('utf-8'), method='PUT',
+                                           headers={'content-type': ''})
+              with urllib.request.urlopen(req) as r: pass
+
+          def find_public_zone_id(base_domain):
+              target = base_domain.rstrip('.') + '.'
+              resp = r53.list_hosted_zones_by_name(DNSName=target, MaxItems='1')
+              zones = resp.get('HostedZones', [])
+              if zones:
+                  z = zones[0]
+                  if (not z.get('Config', {}).get('PrivateZone', False)) and z['Name'].lower() == target.lower():
+                      return (z['Id'].split('/')[-1], z['Name'])
+              paginator = r53.get_paginator('list_hosted_zones')
+              best = (None, None, -1)
+              for page in paginator.paginate():
+                  for z in page.get('HostedZones', []):
+                      if z.get('Config', {}).get('PrivateZone', False): continue
+                      name = z['Name'].rstrip('.').lower()
+                      bd = base_domain.rstrip('.').lower()
+                      if bd == name or bd.endswith('.' + name):
+                          score = len(name)
+                          if score > best[2]:
+                              best = (z['Id'].split('/')[-1], z['Name'], score)
+              return (best[0], best[1]) if best[0] else (None, None)
+
+          def upsert_record(zone_id, record_fqdn, ip, ttl=60):
+              r53.change_resource_record_sets(
+                  HostedZoneId=zone_id,
+                  ChangeBatch={
+                      'Comment': 'Managed by CloudFormation custom resource',
+                      'Changes': [{
+                          'Action': 'UPSERT',
+                          'ResourceRecordSet': {
+                              'Name': record_fqdn,
+                              'Type': 'A',
+                              'TTL': ttl,
+                              'ResourceRecords': [{'Value': ip}]
+                          }
+                      }]
+                  })
+
+          def delete_record(zone_id, record_fqdn, ip):
+              try:
+                  r53.change_resource_record_sets(
+                      HostedZoneId=zone_id,
+                      ChangeBatch={
+                          'Comment': 'Cleanup by CloudFormation custom resource',
+                          'Changes': [{
+                              'Action': 'DELETE',
+                              'ResourceRecordSet': {
+                                  'Name': record_fqdn,
+                                  'Type': 'A',
+                                  'TTL': 60,
+                                  'ResourceRecords': [{'Value': ip}]
+                              }
+                          }]
+                      })
+              except Exception:
+                  pass
+
+          def handler(event, context):
+              props = event['ResourceProperties']
+              base_domain = props['BaseDomain']
+              stack_name = props['StackName']
+              ip = props['TargetIp']
+              record_fqdn = f"{stack_name}.{base_domain}".rstrip('.') + '.'
+              try:
+                  zone_id, zone_name = find_public_zone_id(base_domain)
+                  managed = False
+                  if event['RequestType'] in ('Create', 'Update'):
+                      if zone_id:
+                          upsert_record(zone_id, record_fqdn, ip, ttl=int(props.get('TTL', 60)))
+                          managed = True
+                      data = {
+                          'HostedZoneId': zone_id or '',
+                          'RecordFQDN': record_fqdn.rstrip('.'),
+                          'Managed': 'true' if managed else 'false'
+                      }
+                      send(event, context, 'SUCCESS', data, physical_id=record_fqdn)
+                  elif event['RequestType'] == 'Delete':
+                      if zone_id:
+                          delete_record(zone_id, record_fqdn, ip)
+                      data = {
+                          'HostedZoneId': zone_id or '',
+                          'RecordFQDN': record_fqdn.rstrip('.'),
+                          'Managed': 'false'
+                      }
+                      send(event, context, 'SUCCESS', data, physical_id=record_fqdn)
+              except Exception as e:
+                  send(event, context, 'FAILED', {'Message': str(e)}, physical_id=record_fqdn, reason=str(e))
+
+  DNSManager:
+    Type: Custom::DNSManager
+    Properties:
+      ServiceToken: !GetAtt DNSManagerFunction.Arn
+      BaseDomain: !Ref DomainName
+      StackName: !Ref AWS::StackName
+      TargetIp: !GetAtt ElasticIP.PublicIp
+      TTL: 60
+
+Outputs:
+  SetupProgressURL:
+    Value: !Join ["", ["http://", !GetAtt ElasticIP.PublicIp, ":8087"]]
+    Description: Setup progress page (by IP)
