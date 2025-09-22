@@ -2,7 +2,7 @@ const express = require('express');
 const crypto = require('crypto');
 
 const app = express();
-const PORT = 9595;
+const PORT = process.env.PORT || 9595;
 
 // === Config: incoming (receiving) app ===
 const INCOMING_APP = process.env.INCOMING_APP || 'rtmprelay';
